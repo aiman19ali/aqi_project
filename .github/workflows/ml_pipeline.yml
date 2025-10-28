@@ -23,7 +23,11 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install hopsworks pandas scikit-learn xgboost joblib
+        # Install Hopsworks with Python extras (includes pyarrow) and pin to 4.2.x
+        pip install "hopsworks[python]==4.2.*"
+        # Ensure pyarrow is available (some environments need an explicit install)
+        pip install pyarrow
+        pip install pandas scikit-learn xgboost joblib
         
     - name: Run ML Pipeline
       run: |
