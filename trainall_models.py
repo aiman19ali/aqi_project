@@ -1,229 +1,104 @@
-# train_all_models.py
-# This file trains 3 models to predict Air Quality Index (AQI)
-# for the next 24, 48, and 72 hours.
+# train_all_models_improved.py
 
 import pandas as pd
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import train_test_split, TimeSeriesSplit
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-import joblib
-import os
 import numpy as np
 from xgboost import XGBRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+import joblib
+import os
 
-# make a folder to save our models
-os.makedirs("models", exist_ok=True)
+# ------------------------------
+# 1. Load Data
+# ------------------------------
 
-print("Loading cleaned data...")
-df = pd.read_csv("data/clean_aqi.csv")
+data_file = 'data/cleaned_data.csv'
+if not os.path.exists(data_file):
+    raise FileNotFoundError(f"{data_file} not found!")
 
-# Create target columns for future predictions (shift AQI forward)
-df['target_24h'] = df['aqi_index'].shift(-1)  # AQI 1 day later
-df['target_48h'] = df['aqi_index'].shift(-2)  # AQI 2 days later  
-df['target_72h'] = df['aqi_index'].shift(-3)  # AQI 3 days later
+data = pd.read_csv(data_file)
+print(f"📂 Loaded data with shape: {data.shape}")
 
-# Remove rows with missing targets (last 3 days)
-df = df.dropna(subset=['target_24h', 'target_48h', 'target_72h'])
+# ------------------------------
+# 2. Feature Engineering
+# ------------------------------
 
-# remove columns we don't need for training
-target_columns = ['target_24h', 'target_48h', 'target_72h']
-columns_to_drop = target_columns + ['aqi_index', 'date']
-X = df.drop(columns=columns_to_drop)
+# Basic numeric features
+features = [
+    'co', 'no', 'no2', 'o3', 'so2', 'pm2_5', 'pm10', 'nh3',
+    'temperature', 'humidity', 'pressure', 'wind_speed',
+    'day_of_week'
+]
 
-# Ensure all remaining columns are numeric
-X = X.select_dtypes(include=[np.number])
+# Add lag features for AQI (previous 1,2,3 hours)
+for lag in [1, 2, 3]:
+    data[f'aqi_lag_{lag}'] = data['aqi_7day_avg'].shift(lag)  # make sure 'aqi' column exists
+    features.append(f'aqi_lag_{lag}')
 
-print(f"Training with {X.shape[1]} features: {list(X.columns)}")
-print(f"Training data shape: {X.shape}")
+# Fill NaNs using backward fill
+data = data.bfill()
 
-# define which targets we want to predict
+# Fill remaining NaNs in numeric columns with mean
+numeric_cols = data.select_dtypes(include=np.number).columns
+data[numeric_cols] = data[numeric_cols].fillna(data[numeric_cols].mean())
+
+# Targets for different forecast horizons
+data['aqi_24h'] = data['aqi_index'].shift(-24)  # AQI 24 hours later
+data['aqi_48h'] = data['aqi_index'].shift(-48)  # AQI 48 hours later
+data['aqi_72h'] = data['aqi_index'].shift(-72)  # AQI 72 hours later
+
+data.dropna(subset=['aqi_24h','aqi_48h','aqi_72h'], inplace=True)
+
 targets = {
-    'target_24h': "models/model_24h.pkl",
-    'target_48h': "models/model_48h.pkl",
-    'target_72h': "models/model_72h.pkl"
+    '24h': 'aqi_24h',
+    '48h': 'aqi_48h',
+    '72h': 'aqi_72h'
 }
 
-print("Training models with XGBoost (Gradient Boosting)...")
-for target, model_path in targets.items():
-    print(f"\nNow training for: {target}")
+# ------------------------------
+# 3. Train & Save Models
+# ------------------------------
 
-    y = df[target]
+models_dir = 'models'
+os.makedirs(models_dir, exist_ok=True)
 
-    # split data into train and test parts (time-ordered)
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+for horizon, target in targets.items():
+    print(f"\n⏳ Training model for {horizon} prediction...")
 
-    # Use TimeSeriesSplit cross-validation on the training set to pick best params robustly
-    # Only use TimeSeriesSplit when there's enough training data; otherwise fall back to single validation slice
-    n_train = len(X_train)
-    use_tscv = n_train >= 20
-
-    param_grid = [
-        {"max_depth": 4, "learning_rate": 0.1},
-        {"max_depth": 6, "learning_rate": 0.1},
-        {"max_depth": 6, "learning_rate": 0.01},
-        {"max_depth": 8, "learning_rate": 0.05},
-    ]
-
-    best_params = None
-    best_cv_mean = float("inf")
-    best_cv_std = None
-
-    if use_tscv:
-        n_splits = 5
-        tscv = TimeSeriesSplit(n_splits=n_splits)
-        print(f" Using TimeSeriesSplit with {n_splits} splits for CV (n_train={n_train})")
-
-        for params in param_grid:
-            fold_rmses = []
-            print(f"  CV try params: max_depth={params['max_depth']}, lr={params['learning_rate']}")
-            for fold, (tr_idx, val_idx) in enumerate(tscv.split(X_train)):
-                X_tr_fold = X_train.iloc[tr_idx]
-                y_tr_fold = y_train.iloc[tr_idx]
-                X_val_fold = X_train.iloc[val_idx]
-                y_val_fold = y_train.iloc[val_idx]
-
-                try:
-                    m = XGBRegressor(
-                        n_estimators=1000,
-                        max_depth=params["max_depth"],
-                        learning_rate=params["learning_rate"],
-                        random_state=42,
-                        n_jobs=-1,
-                        objective="reg:squarederror",
-                    )
-                    m.fit(
-                        X_tr_fold,
-                        y_tr_fold,
-                        eval_set=[(X_val_fold, y_val_fold)],
-                        eval_metric="rmse",
-                        early_stopping_rounds=20,
-                        verbose=False,
-                    )
-                    val_preds = m.predict(X_val_fold)
-                    val_rmse = float(np.sqrt(mean_squared_error(y_val_fold, val_preds)))
-                    fold_rmses.append(val_rmse)
-                    print(f"    fold {fold+1}/{n_splits} val RMSE: {val_rmse:.4f}")
-                except Exception as e:
-                    print(f"    fold {fold+1} error: {e}")
-
-            if fold_rmses:
-                mean_rmse = float(np.mean(fold_rmses))
-                std_rmse = float(np.std(fold_rmses))
-                print(f"   -> mean RMSE: {mean_rmse:.4f} (std {std_rmse:.4f})")
-                if mean_rmse < best_cv_mean:
-                    best_cv_mean = mean_rmse
-                    best_cv_std = std_rmse
-                    best_params = params
-    else:
-        # Fallback: single validation slice from the end of training (time-ordered)
-        val_size = max(1, int(0.1 * len(X_train)))
-        X_tr = X_train.iloc[:-val_size]
-        y_tr = y_train.iloc[:-val_size]
-        X_val = X_train.iloc[-val_size:]
-        y_val = y_train.iloc[-val_size:]
-        print(f" Using single validation slice: train={len(X_tr)}, val={len(X_val)} (n_train={n_train})")
-
-        for params in param_grid:
-            print(f"  Try params: max_depth={params['max_depth']}, lr={params['learning_rate']}")
-            try:
-                m = XGBRegressor(
-                    n_estimators=1000,
-                    max_depth=params["max_depth"],
-                    learning_rate=params["learning_rate"],
-                    random_state=42,
-                    n_jobs=-1,
-                    objective="reg:squarederror",
-                )
-                m.fit(
-                    X_tr,
-                    y_tr,
-                    eval_set=[(X_val, y_val)],
-                    eval_metric="rmse",
-                    early_stopping_rounds=20,
-                    verbose=False,
-                )
-                val_preds = m.predict(X_val)
-                mean_rmse = float(np.sqrt(mean_squared_error(y_val, val_preds)))
-                print(f"   -> val RMSE: {mean_rmse:.4f}")
-                if mean_rmse < best_cv_mean:
-                    best_cv_mean = mean_rmse
-                    best_params = params
-            except Exception as e:
-                print(f"   Skipped params {params} due to error: {e}")
-
-    if best_params is None:
-        print("No parameter set produced a successful CV result for this target. Skipping.")
+    if target not in data.columns:
+        print(f"⚠️ Target column '{target}' not found in data. Skipping.")
         continue
 
-    print(f" Selected best params: {best_params} with CV mean RMSE={best_cv_mean:.4f}")
+    X = data[features]
+    y = data[target]
 
-    # Retrain on full training set using a small validation slice for early stopping
-    val_size = max(1, int(0.1 * len(X_train))) if len(X_train) >= 5 else 0
-    if val_size > 0:
-        X_tr_full = X_train.iloc[:-val_size]
-        y_tr_full = y_train.iloc[:-val_size]
-        X_val_full = X_train.iloc[-val_size:]
-        y_val_full = y_train.iloc[-val_size:]
-        eval_set_full = [(X_val_full, y_val_full)]
-    else:
-        X_tr_full = X_train
-        y_tr_full = y_train
-        eval_set_full = None
-
-    best_model = XGBRegressor(
-        n_estimators=1000,
-        max_depth=best_params["max_depth"],
-        learning_rate=best_params["learning_rate"],
-        random_state=42,
-        n_jobs=-1,
-        objective="reg:squarederror",
+    # Split into train/test
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42
     )
-    if eval_set_full:
-        best_model.fit(X_tr_full, y_tr_full, eval_set=eval_set_full, eval_metric="rmse", early_stopping_rounds=20, verbose=False)
-    else:
-        best_model.fit(X_tr_full, y_tr_full)
 
-    # Evaluate on the held-out test set
-    preds = best_model.predict(X_test)
-    mae = mean_absolute_error(y_test, preds)
-    rmse = np.sqrt(mean_squared_error(y_test, preds))
-    r2 = r2_score(y_test, preds)
+    # Define XGBoost model
+    model = XGBRegressor(
+        n_estimators=500,
+        learning_rate=0.05,
+        max_depth=6,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        random_state=42
+    )
 
-    print(f"Results for {target}:")
-    print(f"MAE  : {mae:.3f}")
-    print(f"RMSE : {rmse:.3f}")
-    print(f"R²   : {r2:.3f}")
+    # Train model
+    model.fit(X_train, y_train)
 
-    # save the model
-    joblib.dump(best_model, model_path)
-    print(f"Model saved at: {model_path}")
+    # Evaluate model
+    y_pred = model.predict(X_test)
+    mae = mean_absolute_error(y_test, y_pred)
+    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+    print(f"✅ {horizon} model trained: MAE={mae:.2f}, RMSE={rmse:.2f}")
 
-    # save metrics and chosen params to CSV (append mode)
-    # try to get best iteration from the trained booster (if early stopping was used)
-    try:
-        best_iter = getattr(best_model, "best_iteration", None)
-        if best_iter is None:
-            best_iter = best_model.get_booster().best_iteration
-        if best_iter is not None:
-            best_iter = int(best_iter)
-    except Exception:
-        best_iter = None
+    # Save model
+    model_file = os.path.join(models_dir, f"xgb_aqi_{horizon}.joblib")
+    joblib.dump(model, model_file)
+    print(f"💾 Saved model: {model_file}")
 
-    metrics_row = {
-        "target": target,
-        "mae": float(mae),
-        "rmse": float(rmse),
-        "r2": float(r2),
-        "best_max_depth": int(best_params["max_depth"]),
-        "best_learning_rate": float(best_params["learning_rate"]),
-        "cv_mean_rmse": float(best_cv_mean) if best_cv_mean is not None else None,
-        "cv_std_rmse": float(best_cv_std) if best_cv_std is not None else None,
-        "best_iteration": int(best_iter) if best_iter is not None else None,
-    }
-    metrics_csv = os.path.join("models", "model_metrics.csv")
-    # create file with header if missing
-    write_header = not os.path.exists(metrics_csv)
-    metrics_df = pd.DataFrame([metrics_row])
-    metrics_df.to_csv(metrics_csv, mode="a", header=write_header, index=False)
-
-print("\nAll models are trained and saved successfully!")
+print("\n🎉 All improved models trained and saved successfully!")
