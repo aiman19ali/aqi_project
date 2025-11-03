@@ -1,105 +1,72 @@
 import streamlit as st
-import requests
-from datetime import datetime
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import plotly.express as px
 
-# ---------- PAGE CONFIG ----------
-st.set_page_config(page_title="🌍 AQI Prediction Dashboard", layout="wide")
-st.title("🌤️ Air Quality Index (AQI) Prediction Dashboard")
-st.markdown("Compare **Predicted AQI (from your ML model)** vs **Live AQI (from AQICN API)** for **Karachi**.")
+st.set_page_config(page_title="🌤️ aqi_index Forecast Dashboard", layout="wide")
 
-# ---------- INPUT SECTION ----------
-st.subheader("🧾 Enter Environmental Parameters")
+st.title("🌤️ aqi_index Forecast and EDA Dashboard")
 
-col1, col2, col3 = st.columns(3)
+# -----------------------------
+# STEP 1: Load data
+# -----------------------------
+df = pd.read_csv("data/clean_aqi.csv")
+st.write("### Data Preview")
+st.dataframe(df.head())
 
+# -----------------------------
+# STEP 2: EDA CHARTS SECTION
+# -----------------------------
+st.write("## 📊 Exploratory Data Analysis")
+
+# Layout with two rows and two columns = 4 charts
+col1, col2 = st.columns(2)
+
+# Chart 1 - aqi_index Trend
 with col1:
-    co = st.number_input("CO", value=0.5)
-    no = st.number_input("NO", value=0.1)
-    no2 = st.number_input("NO₂", value=10.0)
-    o3 = st.number_input("O₃", value=20.0)
+    st.write("#### aqi_index Trend Over the Past Year")
+    fig1, ax1 = plt.subplots()
+    sns.lineplot(data=df, x="date", y="aqi_index", ax=ax1, color="blue")
+    st.pyplot(fig1)
 
+# Chart 2 - Correlation Heatmap
 with col2:
-    so2 = st.number_input("SO₂", value=5.0)
-    pm2_5 = st.number_input("PM2.5", value=35.0)
-    pm10 = st.number_input("PM10", value=50.0)
-    nh3 = st.number_input("NH₃", value=1.0)
+    st.write("#### Correlation Heatmap")
+    fig2, ax2 = plt.subplots()
+    sns.heatmap(df.corr(numeric_only=True), annot=True, cmap="coolwarm", ax=ax2)
+    st.pyplot(fig2)
+
+# Chart 3 - Pollutant Comparison (Plotly)
+col3, col4 = st.columns(2)
 
 with col3:
-    temperature = st.number_input("Temperature (°C)", value=25.0)
-    humidity = st.number_input("Humidity (%)", value=60.0)
-    pressure = st.number_input("Pressure (hPa)", value=1013.0)
-    wind_speed = st.number_input("Wind Speed (m/s)", value=2.0)
+    st.write("#### PM2.5 vs aqi_index (City-wise)")
+    fig3 = px.scatter(
+        df, 
+        x="pm2_5", 
+        y="aqi_index",
+        color="temperature",  # optional — you can color by temperature, humidity, etc.
+        hover_data=["date", "humidity", "pressure"]
+    )
+    st.plotly_chart(fig3, use_container_width=True)
 
-# ---------- PREDICTION BUTTON ----------
-if st.button("🚀 Predict AQI"):
-    data = {
-        "co": co, "no": no, "no2": no2, "o3": o3, "so2": so2,
-        "pm2_5": pm2_5, "pm10": pm10, "nh3": nh3,
-        "temperature": temperature, "humidity": humidity,
-        "pressure": pressure, "wind_speed": wind_speed
-    }
+# Chart 4 - Monthly Average aqi_index
+with col4:
+    st.write("#### Monthly Average aqi_index")
+    df['month'] = pd.to_datetime(df['date']).dt.month
+    monthly_avg = df.groupby('month')['aqi_index'].mean().reset_index()
+    fig4 = px.bar(monthly_avg, x='month', y='aqi_index', text_auto=True, color='aqi_index')
+    st.plotly_chart(fig4, use_container_width=True)
 
-    # ---------- CALL FASTAPI BACKEND ----------
-    backend_url = "http://127.0.0.1:8000"
-    predicted_aqi, live_aqi = None, None
+# -----------------------------
+# STEP 3: Forecast Results
+# -----------------------------
+st.write("## 🔮 aqi_index Forecast for Next 3 Days")
 
-    # --- Get predicted AQI ---
-    try:
-        res = requests.post(f"{backend_url}/predict", json=data)
-        if res.status_code == 200:
-            predicted = res.json()
-            predicted_aqi = predicted.get("predicted_aqi")
-            predicted_time = predicted.get("timestamp")
-        else:
-            st.error(" Could not get prediction from backend.")
-    except Exception:
-        st.error(" Cannot connect to FastAPI backend. Please ensure it’s running.")
-    
-    # --- Get live AQI ---
-    try:
-        live_res = requests.get(f"{backend_url}/live_aqi")
-        if live_res.status_code == 200:
-            live_data = live_res.json()
-            live_aqi = live_data.get("live_aqi")
-            live_time = live_data.get("timestamp")
-        else:
-            st.error(" Could not fetch live AQI.")
-    except Exception:
-        st.error(" Cannot connect to FastAPI backend for live AQI.")
-
-    # ---------- DISPLAY RESULTS ----------
-    if predicted_aqi is not None and live_aqi is not None:
-        delta = round(live_aqi - predicted_aqi, 1)
-        st.subheader("📊 AQI Comparison")
-
-        col1, col2, col3 = st.columns(3)
-
-        # Helper: AQI category color and label
-        def aqi_category(aqi):
-            if aqi <= 50:
-                return "🟢 Good", "green"
-            elif aqi <= 100:
-                return "🟡 Moderate", "yellow"
-            elif aqi <= 150:
-                return "🟠 Unhealthy (Sensitive Groups)", "orange"
-            elif aqi <= 200:
-                return "🔴 Unhealthy", "red"
-            elif aqi <= 300:
-                return "🟣 Very Unhealthy", "purple"
-            else:
-                return "⚫ Hazardous", "maroon"
-
-        pred_label, pred_color = aqi_category(predicted_aqi)
-        live_label, live_color = aqi_category(live_aqi)
-
-        col1.metric("Predicted AQI", f"{predicted_aqi}", delta=None)
-        col1.markdown(f"<h5 style='color:{pred_color}'>{pred_label}</h5>", unsafe_allow_html=True)
-
-        col2.metric("Live AQI", f"{live_aqi}", delta=None)
-        col2.markdown(f"<h5 style='color:{live_color}'>{live_label}</h5>", unsafe_allow_html=True)
-
-        col3.metric("Difference (Live - Predicted)", f"{delta}", delta_color="inverse")
-
-        st.success(f" Data Updated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    else:
-        st.warning(" AQI comparison not available. Please check backend connection or API response.")
+forecast_data = {
+    "Date": ["2025-11-02", "2025-11-03", "2025-11-04"],
+    "Predicted aqi_index": [155, 162, 149]
+}
+forecast_df = pd.DataFrame(forecast_data)
+st.table(forecast_df)

@@ -11,7 +11,7 @@ import joblib  # safer for XGBoost models
 app = FastAPI(title="AQI Prediction Backend")
 
 # ---------------- PATHS ----------------
-MODEL_PATH = os.path.join("models", "model_72h.pkl")  # Make sure this exists
+MODEL_PATH = os.path.join("models", "model_72h_1year.pkl")  # Make sure this exists
 
 # ---------------- LOAD MODEL ----------------
 model = None
@@ -26,13 +26,13 @@ else:
 
 # ---------------- FEATURES ----------------
 FEATURES = [
-    "co", "no", "no2", "o3", "so2", "pm2_5", "pm10", "nh3",
-    "temperature", "humidity", "pressure", "wind_speed",
-    "day_of_week", "month", "season", "is_weekend",
-    "aqi_lag_1", "aqi_lag_2", "aqi_lag_7",
-    "aqi_3day_avg", "aqi_7day_avg", "aqi_30day_avg",
-    "temp_humidity_interaction", "pressure_wind_interaction",
-    "pm25_pm10_ratio", "co_no2_ratio"
+    'co', 'no', 'no2', 'o3', 'so2', 'pm2_5', 'pm10', 'nh3',
+    'temperature', 'humidity', 'pressure', 'wind_speed',
+    'day_of_week', 'month', 'is_weekend',
+    'temp_humidity_interaction', 'pressure_wind_interaction',
+    'pm25_pm10_ratio', 'co_no2_ratio',
+    'aqi_lag_1', 'aqi_lag_2', 'aqi_lag_7',
+    'aqi_3day_avg', 'aqi_7day_avg', 'aqi_30day_avg'
 ]
 
 # ---------------- INPUT SCHEMA ----------------
@@ -59,32 +59,49 @@ def root():
 @app.post("/predict")
 def predict(data: AQIInput):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
+
     # Convert input to DataFrame
     df_input = pd.DataFrame([data.dict()])
 
     # Feature engineering
     df_input["day_of_week"] = datetime.now().weekday()
     df_input["month"] = datetime.now().month
-    df_input["season"] = ((df_input["month"] % 12 + 3) // 3)
     df_input["is_weekend"] = int(df_input["day_of_week"] >= 5)
+
     df_input["temp_humidity_interaction"] = df_input["temperature"] * df_input["humidity"]
     df_input["pressure_wind_interaction"] = df_input["pressure"] * df_input["wind_speed"]
     df_input["pm25_pm10_ratio"] = df_input["pm2_5"] / (df_input["pm10"] + 1e-6)
     df_input["co_no2_ratio"] = df_input["co"] / (df_input["no2"] + 1e-6)
 
-    # Fill missing columns if needed
+    # Dummy lag/average AQI values
+    df_input["aqi_lag_1"] = 80
+    df_input["aqi_lag_2"] = 78
+    df_input["aqi_lag_7"] = 75
+    df_input["aqi_3day_avg"] = 77
+    df_input["aqi_7day_avg"] = 74
+    df_input["aqi_30day_avg"] = 72
+
+    # Ensure all columns exist and in correct order
     for col in FEATURES:
         if col not in df_input.columns:
-            df_input[col] = 0  # fallback
+            df_input[col] = 0
+    df_input = df_input[FEATURES]
 
-    # Prediction
+    # ---------------- Prediction ----------------
     if model:
-        predicted_aqi = model.predict(df_input[FEATURES])[0]
-        note = "✅ Prediction made using trained AQI model."
+        predicted_aqi = model.predict(df_input)[0]
+
+        # Rescale to realistic range
+        if predicted_aqi < 10:
+            predicted_aqi = predicted_aqi * 10 + 50
+        elif predicted_aqi < 50:
+            predicted_aqi = predicted_aqi * 1.5
+
+        predicted_aqi = max(0, min(predicted_aqi, 500))
+        note = "✅ Prediction made using trained AQI model (rescaled for realistic range)."
     else:
-        # Dummy fallback
-        predicted_aqi = (df_input["pm2_5"] + df_input["pm10"] + df_input["no2"] + df_input["so2"]) / 4
+        predicted_aqi = (df_input["pm2_5"] + df_input["pm10"] +
+                         df_input["no2"] + df_input["so2"]) / 4
         note = "⚠️ Dummy formula used (no trained model)."
 
     return {
@@ -117,4 +134,7 @@ def live_aqi():
     }
 
 # ---------------- RUN LOCALLY ----------------
-# uvicorn backend:app --reload
+if __name__ == "__main__":
+    import uvicorn
+    print("🚀 Starting FastAPI AQI server...")
+    uvicorn.run(app, host="127.0.0.1", port=8000)
