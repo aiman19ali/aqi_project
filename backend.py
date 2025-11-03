@@ -133,6 +133,50 @@ def live_aqi():
         "note": note
     }
 
+
+@app.get("/get_forecast")
+def get_forecast():
+    try:
+        # Load the cleaned dataset
+        df = pd.read_csv("data/clean_aqi.csv")
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.sort_values("date")
+
+        latest = df.iloc[-1]     # last known reading
+
+        forecasts = []
+        for i in range(1, 4):  # next 3 days
+            future_date = latest["date"] + pd.Timedelta(days=i)
+
+            sample = latest.copy()
+            sample["date"] = future_date
+
+            # Feature updates
+            sample["day_of_week"] = future_date.weekday()
+            sample["month"] = future_date.month
+            sample["is_weekend"] = int(sample["day_of_week"] >= 5)
+
+            sample["temp_humidity_interaction"] = sample["temperature"] * sample["humidity"]
+            sample["pressure_wind_interaction"] = sample["pressure"] * sample["wind_speed"]
+            sample["pm25_pm10_ratio"] = sample["pm2_5"] / (sample["pm10"] + 1e-6)
+            sample["co_no2_ratio"] = sample["co"] / (sample["no2"] + 1e-6)
+
+            # Pick the required model columns
+            X = sample[FEATURES].values.reshape(1, -1)
+
+            pred = model.predict(X)[0]
+            pred = max(0, min(pred, 500))  # limit
+
+            forecasts.append({
+                "date": future_date.strftime("%Y-%m-%d"),
+                "predicted_aqi": round(float(pred), 2)
+            })
+
+        return {"status": "success", "forecasts": forecasts}
+
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 # ---------------- RUN LOCALLY ----------------
 if __name__ == "__main__":
     import uvicorn

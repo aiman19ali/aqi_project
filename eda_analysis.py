@@ -4,7 +4,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-
 # ---------------------------------------------------------
 # Utility
 # ---------------------------------------------------------
@@ -30,106 +29,124 @@ def load_daily_history(csv_path: str) -> pd.DataFrame:
 
     df["date"] = pd.to_datetime(df["date"], utc=True, errors="coerce").dt.date
     df = df.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
-
     return df
 
 
 # ---------------------------------------------------------
-# Summaries
+# Plot 1: AQI Trend (Category Bands)
 # ---------------------------------------------------------
-def summarize_numeric(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute descriptive stats."""
-    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    if not numeric_cols:
-        print("⚠️ No numeric columns found.")
-        return pd.DataFrame()
-    return df[numeric_cols].describe().T
+def plot_aqi_trend(df: pd.DataFrame, save_path: str):
+    """Plot AQI trend over time with AQI category bands."""
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.sort_values("date")
 
+    fig, ax = plt.subplots(figsize=(12, 5))
 
-# ---------------------------------------------------------
-# Plot 1: AQI Trend
-# ---------------------------------------------------------
-def plot_trends(df: pd.DataFrame):
-    """Return AQI trend and 7/30-day rolling means as a figure."""
-    ts = df.copy()
-    ts["date"] = pd.to_datetime(ts["date"])
+    # AQI category bands
+    aqi_bands = [
+        (0, 50, "Good", "lightgreen"),
+        (51, 100, "Moderate", "khaki"),
+        (101, 150, "Unhealthy (Sensitive)", "orange"),
+        (151, 200, "Unhealthy", "tomato"),
+        (201, 300, "Very Unhealthy", "violet"),
+    ]
 
-    fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(ts["date"], ts["aqi_index"], label="AQI (daily)", color="#1f77b4")
-    ax.plot(ts["date"], ts["aqi_index"].rolling(7, min_periods=1).mean(),
-            label="7D Rolling Mean", color="#ff7f0e")
-    ax.plot(ts["date"], ts["aqi_index"].rolling(30, min_periods=1).mean(),
-            label="30D Rolling Mean", color="#2ca02c")
+    for low, high, label, color in aqi_bands:
+        ax.axhspan(low, high, facecolor=color, alpha=0.3, label=label)
 
-    ylabel = "AQI Index (0–500)" if ts["aqi_index"].max() > 50 else "AQI Level (1–5)"
-    ax.set_title("Daily AQI – 1 Year with Rolling Means")
-    ax.set_ylabel(ylabel)
-    ax.legend()
+    # Plot AQI line
+    ax.plot(df["date"], df["aqi_index"], color="steelblue", linewidth=2, marker="o", markersize=3)
+
+    ax.set_title("AQI Trend Over Time (Category-based)")
+    ax.set_xlabel("Date")
+    ax.set_ylabel("AQI Index (0–300)")
+    ax.legend(loc="upper left", bbox_to_anchor=(1, 1))
     fig.tight_layout()
-    return fig
+
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
 
 
 # ---------------------------------------------------------
-# Plot 2: AQI Boxplot by Month
+# Plot 2: AQI Distribution by Month
 # ---------------------------------------------------------
-def plot_box_by_month(df: pd.DataFrame):
-    """Return boxplot of AQI by calendar month."""
-    tmp = df.copy()
-    tmp["date"] = pd.to_datetime(tmp["date"], errors="coerce")
-    tmp["month"] = tmp["date"].dt.month
+def plot_box_by_month(df: pd.DataFrame, save_path: str):
+    """Boxplot of AQI distribution by month."""
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"])
+    df["month"] = df["date"].dt.month_name()
 
-    fig, ax = plt.subplots(figsize=(10, 4))
-    sns.boxplot(data=tmp, x="month", y="aqi_index", palette="coolwarm", ax=ax)
+    fig, ax = plt.subplots(figsize=(12, 5))
+    sns.boxplot(data=df, x="month", y="aqi_index", palette="coolwarm", ax=ax)
     ax.set_title("AQI Distribution by Month")
     ax.set_xlabel("Month")
-    ax.set_ylabel("AQI Index (0–500)" if tmp["aqi_index"].max() > 50 else "AQI Level (1–5)")
+    ax.set_ylabel("AQI Index (0–300)")
+    plt.xticks(rotation=45)
     fig.tight_layout()
-    return fig
+
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
 
 
 # ---------------------------------------------------------
 # Plot 3: Correlation Heatmap
 # ---------------------------------------------------------
-def plot_components_corr_heatmap(df: pd.DataFrame):
-    """Return correlation heatmap of pollutants and features."""
-    tmp = df.copy()
-    tmp["date"] = pd.to_datetime(tmp["date"], errors="coerce")
-    tmp["year"] = tmp["date"].dt.year
-    tmp["month"] = tmp["date"].dt.month
-    tmp["day"] = tmp["date"].dt.day
-
-    numeric_cols = tmp.select_dtypes(include=[np.number]).columns.tolist()
-    corr = tmp[numeric_cols].corr(numeric_only=True)
+def plot_correlation_heatmap(df: pd.DataFrame, save_path: str):
+    """Heatmap of correlation between pollutants and AQI."""
+    numeric_cols = df.select_dtypes(include=np.number).columns
+    corr = df[numeric_cols].corr()
 
     fig, ax = plt.subplots(figsize=(10, 6))
-    sns.heatmap(corr, cmap="vlag", center=0, annot=False, linewidths=0.3, ax=ax)
-    ax.set_title("Correlation Heatmap: AQI, Pollutants & Time Features")
+    sns.heatmap(corr, cmap="RdBu_r", center=0, annot=True, fmt=".2f", ax=ax)
+    ax.set_title("Correlation Heatmap (AQI vs Pollutants)")
     fig.tight_layout()
-    return fig
+
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
 
 
 # ---------------------------------------------------------
-# Plot 4: Pollutant Concentrations
+# Plot 4: Average Pollutant Concentrations
 # ---------------------------------------------------------
-def plot_pollutant_concentrations(df: pd.DataFrame):
-    """Return bar chart of average pollutant concentrations."""
-    pollutant_cols = ["co", "no", "no2", "o3", "so2", "pm2_5", "pm10", "nh3"]
-    existing_cols = [c for c in pollutant_cols if c in df.columns]
+def plot_pollutant_concentrations(df: pd.DataFrame, save_path: str):
+    """Bar chart of average pollutant concentrations."""
+    pollutants = ["co", "no", "no2", "o3", "so2", "pm2_5", "pm10", "nh3"]
+    existing = [p for p in pollutants if p in df.columns]
 
+    avg_values = df[existing].mean().sort_values(ascending=False)
     fig, ax = plt.subplots(figsize=(10, 5))
-    if not existing_cols:
-        ax.text(0.5, 0.5, "No pollutant columns found!", ha="center", va="center")
-        return fig
 
-    avg_values = df[existing_cols].mean().sort_values(ascending=False)
-    colors = plt.cm.Reds(np.linspace(0.4, 0.9, len(avg_values)))
-    bars = ax.bar(avg_values.index, avg_values.values, color=colors, edgecolor="black")
-    for bar, val in zip(bars, avg_values.values):
-        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.5,
-                f"{val:.2f}", ha="center", va="bottom", fontsize=8)
+    bars = ax.bar(avg_values.index, avg_values.values, color="salmon", edgecolor="black")
+    for bar in bars:
+        height = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width() / 2, height + 0.5, f"{height:.2f}",
+                ha="center", va="bottom", fontsize=8)
 
     ax.set_title("Average Pollutant Concentrations (µg/m³)")
     ax.set_xlabel("Pollutant Type")
-    ax.set_ylabel("Concentration (µg/m³)")
+    ax.set_ylabel("Average Concentration (µg/m³)")
     fig.tight_layout()
-    return fig
+
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+# ---------------------------------------------------------
+# Main Execution
+# ---------------------------------------------------------
+if __name__ == "__main__":
+    data_path = "data/clean_aqi.csv"
+    reports_dir = "reports/eda_charts"
+    ensure_reports_dir(reports_dir)
+
+    df = load_daily_history(data_path)
+
+    print("✅ Generating EDA charts...")
+
+    plot_aqi_trend(df, os.path.join(reports_dir, "aqi_trend.png"))
+    plot_box_by_month(df, os.path.join(reports_dir, "aqi_boxplot_by_month.png"))
+    plot_correlation_heatmap(df, os.path.join(reports_dir, "correlation_heatmap.png"))
+    plot_pollutant_concentrations(df, os.path.join(reports_dir, "pollutant_concentrations.png"))
+
+    print(f"✅ Charts saved in: {os.path.abspath(reports_dir)}")
