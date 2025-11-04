@@ -81,6 +81,10 @@ models = {
     3: "model_72h_1year.pkl"
 }
 
+# SCALE FACTOR → adjust according to how model was trained
+# Example: if training target was normalized to 0-10, multiply by 50 to get real AQI
+SCALE_FACTOR = 50
+
 predictions = []
 
 for day, model_file in models.items():
@@ -90,18 +94,21 @@ for day, model_file in models.items():
         continue
 
     model = joblib.load(model_path)
-    pred = model.predict(latest_row)[0]
+    pred_scaled = model.predict(latest_row)[0]
+
+    # Convert to real AQI scale
+    pred_real = round(float(pred_scaled) * SCALE_FACTOR)
 
     date_pred = today + timedelta(days=day - 1)
     predictions.append({
         "Date": date_pred.strftime("%Y-%m-%d"),
-        "Predicted_AQI": round(float(pred), 2)
+        "Predicted_AQI": pred_real
     })
 
 # -----------------------------
 # 6. Display predictions
 # -----------------------------
-print("\n🌤️ Predicted AQI for Next 3 Days:\n")
+print("\n🌤️ Predicted AQI for Next 3 Days (Real AQI Scale):\n")
 for p in predictions:
     print(f"   {p['Date']}: {p['Predicted_AQI']}")
 
