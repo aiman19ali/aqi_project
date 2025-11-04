@@ -71,14 +71,25 @@ def plot_aqi_trend(df: pd.DataFrame, save_path: str):
 # ---------------------------------------------------------
 # Plot 2: AQI Distribution by Month
 # ---------------------------------------------------------
+import calendar
+
 def plot_box_by_month(df: pd.DataFrame, save_path: str):
-    """Boxplot of AQI distribution by month."""
+    """Boxplot of AQI distribution by month, ordered Jan → Dec."""
     df = df.copy()
     df["date"] = pd.to_datetime(df["date"])
+    # numeric month and month name
+    df["month_num"] = df["date"].dt.month
     df["month"] = df["date"].dt.month_name()
 
+    # define full calendar order and make month a categorical with that order
+    month_order = [calendar.month_name[i] for i in range(1, 13)]
+    df["month"] = pd.Categorical(df["month"], categories=month_order, ordered=True)
+
+    # If you only want months that actually appear in the data (keeps order)
+    months_present = [m for m in month_order if m in df["month"].cat.categories and m in df["month"].unique()]
+
     fig, ax = plt.subplots(figsize=(12, 5))
-    sns.boxplot(data=df, x="month", y="aqi_index", palette="coolwarm", ax=ax)
+    sns.boxplot(data=df, x="month", y="aqi_index", order=months_present, palette="coolwarm", ax=ax)
     ax.set_title("AQI Distribution by Month")
     ax.set_xlabel("Month")
     ax.set_ylabel("AQI Index (0–300)")
@@ -89,17 +100,33 @@ def plot_box_by_month(df: pd.DataFrame, save_path: str):
     plt.close(fig)
 
 
+
 # ---------------------------------------------------------
-# Plot 3: Correlation Heatmap
+# ✅ Plot 3: Enhanced Correlation Heatmap (Fixed)
 # ---------------------------------------------------------
 def plot_correlation_heatmap(df: pd.DataFrame, save_path: str):
-    """Heatmap of correlation between pollutants and AQI."""
-    numeric_cols = df.select_dtypes(include=np.number).columns
-    corr = df[numeric_cols].corr()
+    """Correlation heatmap of AQI, pollutants, and time features."""
+    tmp = df.copy()
+    tmp["date"] = pd.to_datetime(tmp["date"], errors="coerce")
+    tmp["year"] = tmp["date"].dt.year
+    tmp["month"] = tmp["date"].dt.month
+    tmp["day"] = tmp["date"].dt.day
+
+    # Select numeric columns only
+    numeric_cols = tmp.select_dtypes(include=[np.number]).columns.tolist()
+    corr = tmp[numeric_cols].corr(numeric_only=True)
 
     fig, ax = plt.subplots(figsize=(10, 6))
-    sns.heatmap(corr, cmap="RdBu_r", center=0, annot=True, fmt=".2f", ax=ax)
-    ax.set_title("Correlation Heatmap (AQI vs Pollutants)")
+    sns.heatmap(
+        corr,
+        cmap="vlag",
+        center=0,
+        annot=False,
+        linewidths=0.3,
+        cbar_kws={"label": "Correlation Coefficient"},
+        ax=ax
+    )
+    ax.set_title("Correlation Heatmap: AQI, Pollutants & Time Features")
     fig.tight_layout()
 
     plt.savefig(save_path, dpi=300, bbox_inches="tight")
@@ -120,8 +147,14 @@ def plot_pollutant_concentrations(df: pd.DataFrame, save_path: str):
     bars = ax.bar(avg_values.index, avg_values.values, color="salmon", edgecolor="black")
     for bar in bars:
         height = bar.get_height()
-        ax.text(bar.get_x() + bar.get_width() / 2, height + 0.5, f"{height:.2f}",
-                ha="center", va="bottom", fontsize=8)
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            height + 0.5,
+            f"{height:.2f}",
+            ha="center",
+            va="bottom",
+            fontsize=8
+        )
 
     ax.set_title("Average Pollutant Concentrations (µg/m³)")
     ax.set_xlabel("Pollutant Type")
