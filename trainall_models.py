@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 from xgboost import XGBRegressor
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 import joblib
 import os
 
@@ -32,7 +32,7 @@ features = [
 
 # Add lag features for AQI (previous 1,2,3 hours)
 for lag in [1, 2, 3]:
-    data[f'aqi_lag_{lag}'] = data['aqi_7day_avg'].shift(lag)  # make sure 'aqi' column exists
+    data[f'aqi_lag_{lag}'] = data['aqi_7day_avg'].shift(lag)
     features.append(f'aqi_lag_{lag}')
 
 # Fill NaNs using backward fill
@@ -43,9 +43,9 @@ numeric_cols = data.select_dtypes(include=np.number).columns
 data[numeric_cols] = data[numeric_cols].fillna(data[numeric_cols].mean())
 
 # Targets for different forecast horizons
-data['aqi_24h'] = data['aqi_index'].shift(-24)  # AQI 24 hours later
-data['aqi_48h'] = data['aqi_index'].shift(-48)  # AQI 48 hours later
-data['aqi_72h'] = data['aqi_index'].shift(-72)  # AQI 72 hours later
+data['aqi_24h'] = data['aqi_index'].shift(-24)
+data['aqi_48h'] = data['aqi_index'].shift(-48)
+data['aqi_72h'] = data['aqi_index'].shift(-72)
 
 data.dropna(subset=['aqi_24h','aqi_48h','aqi_72h'], inplace=True)
 
@@ -92,9 +92,15 @@ for horizon, target in targets.items():
 
     # Evaluate model
     y_pred = model.predict(X_test)
+
     mae = mean_absolute_error(y_test, y_pred)
     rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-    print(f"✅ {horizon} model trained: MAE={mae:.2f}, RMSE={rmse:.2f}")
+    r2 = r2_score(y_test, y_pred)
+
+    print(f"✅ {horizon} model trained:")
+    print(f"   📌 MAE  = {mae:.3f}")
+    print(f"   📌 RMSE = {rmse:.3f}")
+    print(f"   📌 R²   = {r2:.3f}")
 
     # Save model
     model_file = os.path.join(models_dir, f"xgb_aqi_{horizon}.joblib")
