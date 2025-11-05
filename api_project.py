@@ -66,6 +66,98 @@ def http_get_json(url: str) -> Dict:
         raise RuntimeError("Connection failed. Check your internet connection.")
 
 
+PM25_BREAKPOINTS = [
+    (0.0, 12.0, 0, 50),
+    (12.1, 35.4, 51, 100),
+    (35.5, 55.4, 101, 150),
+    (55.5, 150.4, 151, 200),
+    (150.5, 250.4, 201, 300),
+    (250.5, 350.4, 301, 400),
+    (350.5, 500.4, 401, 500),
+]
+
+
+PM10_BREAKPOINTS = [
+    (0, 54, 0, 50),
+    (55, 154, 51, 100),
+    (155, 254, 101, 150),
+    (255, 354, 151, 200),
+    (355, 424, 201, 300),
+    (425, 504, 301, 400),
+    (505, 604, 401, 500),
+]
+
+
+O3_BREAKPOINTS = [
+    (0.0, 54.0, 0, 50),
+    (54.1, 70.0, 51, 100),
+    (70.1, 85.0, 101, 150),
+    (85.1, 105.0, 151, 200),
+    (105.1, 200.0, 201, 300),
+]
+
+
+NO2_BREAKPOINTS = [
+    (0, 53, 0, 50),
+    (54, 100, 51, 100),
+    (101, 360, 101, 150),
+    (361, 649, 151, 200),
+    (650, 1249, 201, 300),
+]
+
+
+SO2_BREAKPOINTS = [
+    (0, 35, 0, 50),
+    (36, 75, 51, 100),
+    (76, 185, 101, 150),
+    (186, 304, 151, 200),
+    (305, 604, 201, 300),
+]
+
+
+def compute_breakpoint_aqi(value: float, breakpoints: List[tuple]) -> float:
+    """Compute AQI for a pollutant using US EPA breakpoints."""
+    if value is None or pd.isna(value):
+        return float("nan")
+    for c_low, c_high, aqi_low, aqi_high in breakpoints:
+        if c_low <= value <= c_high:
+            span = c_high - c_low
+            if span == 0:
+                return float(aqi_high)
+            ratio = (value - c_low) / span
+            return aqi_low + ratio * (aqi_high - aqi_low)
+    # If value exceeds provided breakpoints, clamp to the highest AQI range
+    last = breakpoints[-1]
+    return float(last[3])
+
+
+def compute_row_aqi(row: pd.Series) -> float:
+    """Derive AQI from pollutant concentrations for a given row."""
+    candidates: List[float] = []
+    for pollutant, bp in (
+        ("pm2_5", PM25_BREAKPOINTS),
+        ("pm10", PM10_BREAKPOINTS),
+        ("o3", O3_BREAKPOINTS),
+        ("no2", NO2_BREAKPOINTS),
+        ("so2", SO2_BREAKPOINTS),
+    ):
+        value = row.get(pollutant)
+        if value is not None and not pd.isna(value):
+            candidates.append(compute_breakpoint_aqi(float(value), bp))
+    if not candidates:
+        return float("nan")
+    return float(np.nanmax(candidates))
+
+
+def apply_real_aqi_scale(df: pd.DataFrame) -> pd.DataFrame:
+    """Return dataframe copy with AQI recalculated on 0-500 scale."""
+    if df.empty:
+        return df
+    data = df.copy()
+    data["aqi_index"] = data.apply(compute_row_aqi, axis=1)
+    return data
+
+
 def fetch_history_chunked(lat: float, lon: float, api_key: str, start_dt: datetime, end_dt: datetime, *, chunk_days: int = 5) -> List[Dict]:
     """Fetch historical AQI records between two datetimes in chunked windows."""
     if start_dt >= end_dt:
@@ -269,11 +361,25 @@ def fill_missing_weather_data(forecast_daily: pd.DataFrame, history_daily: pd.Da
 
 
 def select_next_three_days(forecast_daily: pd.DataFrame) -> pd.DataFrame:
-    """Return the next three future days from a daily forecast frame."""
+    """Return exactly the next 3 calendar days (tomorrow, +2, +3) when available.
+
+    Falls back to the earliest three rows strictly after today if any of the
+    exact dates are missing in the incoming frame.
+    """
     if forecast_daily.empty:
         return forecast_daily
+
+    df = forecast_daily.copy()
+    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
     today = datetime.now(timezone.utc).date()
-    return forecast_daily[forecast_daily["date"] > today].head(3).reset_index(drop=True)
+    expected = {today + timedelta(days=1), today + timedelta(days=2), today + timedelta(days=3)}
+
+    exact = df[df["date"].isin(expected)].sort_values("date")
+    if len(exact) >= 3:
+        return exact.head(3).reset_index(drop=True)
+
+    fallback = df[df["date"] > today].sort_values("date").head(3).reset_index(drop=True)
+    return fallback
 
 
 def save_pollutant_features_to_hopsworks(df: pd.DataFrame, feature_group_name: str = "aqi_pollutants", version: int = 1) -> None:
@@ -398,6 +504,7 @@ def main() -> None:
 
     # Compute daily means for the full year
     history_daily = compute_daily_means(history_df)
+    history_daily = apply_real_aqi_scale(history_daily)
     history_daily.to_csv(history_daily_csv, index=False)
 
     # Fetch forecast for next 3 days
@@ -411,6 +518,7 @@ def main() -> None:
     if forecast_df.empty:
         raise RuntimeError("No forecast AQI data returned")
     forecast_daily = compute_daily_means(forecast_df)
+    forecast_daily = apply_real_aqi_scale(forecast_daily)
     
     # Fill missing weather data using interpolation or historical patterns
     forecast_daily = fill_missing_weather_data(forecast_daily, history_daily)

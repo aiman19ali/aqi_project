@@ -47,8 +47,8 @@ exp = lime.explain_instance(
     model.predict
 )
 
-# ✅ Save textual feature impact
-with open("lime_feature_details.txt", "w") as f:
+# ✅ Save textual feature impact (explicit UTF-8 to avoid Windows cp1252 errors)
+with open("lime_feature_details.txt", "w", encoding="utf-8") as f:
     for feature, impact in exp.as_list():
         f.write(f"{feature} → {impact}\n")
 
