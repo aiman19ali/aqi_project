@@ -99,7 +99,8 @@ for day, model_file in models.items():
     # Convert to real AQI scale
     pred_real = round(float(pred_scaled) * SCALE_FACTOR)
 
-    date_pred = today + timedelta(days=day - 1)
+    # Use tomorrow, +2, +3 relative to "today"
+    date_pred = today + timedelta(days=day)
     predictions.append({
         "Date": date_pred.strftime("%Y-%m-%d"),
         "Predicted_AQI": pred_real

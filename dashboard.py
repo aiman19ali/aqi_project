@@ -5,14 +5,7 @@ import plotly.graph_objects as go
 import requests
 import numpy as np
 import os
-
-try:
-    import joblib
-    import shap
-    from lime.lime_tabular import LimeTabularExplainer
-    _explain_pkgs_ok = True
-except Exception:
-    _explain_pkgs_ok = False
+import joblib
 
 # ✅ Streamlit settings
 st.set_page_config(page_title="🌤️ AQI Dashboard", layout="wide")
@@ -118,10 +111,15 @@ with tab6:
 # --------------------------------------------------------------
 with tab5:
     st.write("#### 🧠 Model Explainability – SHAP & LIME")
-    if not _explain_pkgs_ok:
-        st.warning("Install explainability packages to compute live: pip install shap lime joblib")
-    else:
+    compute_explain = st.button("Compute explanations", key="explain_compute")
+    if compute_explain:
         try:
+            try:
+                import shap
+                from lime.lime_tabular import LimeTabularExplainer
+            except Exception as e:
+                st.error("Install explainability packages: pip install shap lime joblib")
+                raise
             # Load a compatible model if available
             model_candidates = [
                 "models/model_24h_1year.pkl",
@@ -303,6 +301,8 @@ with tab5:
                         st.plotly_chart(fig_lime, use_container_width=True)
         except Exception as e:
             st.error(f"Explainability failed: {e}")
+    else:
+        st.caption("Click 'Compute explanations' to load SHAP & LIME (heavy). Other tabs load at start.")
 
 # --------------------------------------------------------------
 # ✅ TAB 1 — AQI TREND (Category Bands + 7D & 30D Rolling Average)

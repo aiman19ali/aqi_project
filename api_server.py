@@ -102,47 +102,60 @@ def predict(data: AQIInput):
 
 def _read_forecast_csvs() -> List[Dict]:
     """
-    Load next-3-day forecast from known CSV outputs and normalize schema.
-    Tries, in order:
+    Load next-3-day forecast from both known sources and combine:
       - data/forecast_daily_next3.csv (from api_project.py)
       - data/predicted_aqi_next3days.csv (from predict_aqi.py)
     Returns list of dicts: {"date": str, "predicted_aqi": float}
     """
-    # Option 1: api_project.py output
+    frames: List[pd.DataFrame] = []
+
+    # Source A: api_project.py output
     try:
-        df = pd.read_csv("data/forecast_daily_next3.csv")
-        # Expected columns include 'date' and possibly 'aqi_index'
-        if "date" in df.columns:
-            if "predicted_aqi" in df.columns:
-                values = (
-                    df[["date", "predicted_aqi"]]
-                    .dropna()
-                    .assign(predicted_aqi=lambda d: d["predicted_aqi"].astype(float))
-                )
-                return values.to_dict(orient="records")
-            if "aqi_index" in df.columns:
-                values = (
-                    df[["date", "aqi_index"]]
-                    .dropna()
-                    .rename(columns={"aqi_index": "predicted_aqi"})
-                )
-                values["predicted_aqi"] = values["predicted_aqi"].astype(float)
-                return values.to_dict(orient="records")
+        a = pd.read_csv("data/forecast_daily_next3.csv")
+        if "date" in a.columns:
+            if "predicted_aqi" in a.columns:
+                a = a[["date", "predicted_aqi"]].dropna()
+            elif "aqi_index" in a.columns:
+                a = a[["date", "aqi_index"]].dropna().rename(columns={"aqi_index": "predicted_aqi"})
+            else:
+                a = None
+            if a is not None:
+                a["predicted_aqi"] = a["predicted_aqi"].astype(float)
+                frames.append(a)
     except Exception:
         pass
 
-    # Option 2: predict_aqi.py output
+    # Source B: predict_aqi.py output
     try:
-        df = pd.read_csv("data/predicted_aqi_next3days.csv")
-        # Expected columns: 'Date', 'Predicted_AQI'
-        if "Date" in df.columns and "Predicted_AQI" in df.columns:
-            values = df.rename(columns={"Date": "date", "Predicted_AQI": "predicted_aqi"}).copy()
-            values["predicted_aqi"] = values["predicted_aqi"].astype(float)
-            return values.to_dict(orient="records")
+        b = pd.read_csv("data/predicted_aqi_next3days.csv")
+        if {"Date", "Predicted_AQI"}.issubset(b.columns):
+            b = b.rename(columns={"Date": "date", "Predicted_AQI": "predicted_aqi"})
+            b["predicted_aqi"] = b["predicted_aqi"].astype(float)
+            frames.append(b[["date", "predicted_aqi"]])
     except Exception:
         pass
 
-    return []
+    if not frames:
+        return []
+
+    merged = pd.concat(frames, ignore_index=True)
+    # Drop duplicates by date, keeping the first occurrence
+    merged = merged.dropna(subset=["date"]).drop_duplicates(subset=["date"], keep="first")
+    return merged.to_dict(orient="records")
+
+
+def _select_next3(records: List[Dict]) -> List[Dict]:
+    if not records:
+        return []
+    df = pd.DataFrame(records)
+    if "date" not in df.columns:
+        return records
+    # Normalize date and filter strictly after today (local date)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
+    from datetime import datetime
+    today = datetime.today().date()
+    df = df[df["date"] > today].sort_values("date").head(3)
+    return df.to_dict(orient="records")
 
 
 @app.get("/get_forecast")
@@ -151,7 +164,7 @@ def get_forecast():
     records = _read_forecast_csvs()
     if not records:
         raise HTTPException(status_code=404, detail="No forecast data available. Run data collection/prediction first.")
-    return {"status": "success", "forecasts": records}
+    return {"status": "success", "forecasts": _select_next3(records)}
 
 
 @app.get("/")
