@@ -14,6 +14,6 @@ statsmodels>=0.14.0
 shap>=0.43.0
 lime>=0.2.0.1
 xgboost>=1.7.0
-hopsworks>=3.7.0; python_version < '3.12'
+hopsworks[python]>=4.2,<4.3; python_version < '3.12'
 python-dotenv>=1.0.0
 

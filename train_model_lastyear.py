@@ -1,4 +1,4 @@
-# train_model_lastyear.py
+                         
 
 import pandas as pd
 import numpy as np
@@ -9,44 +9,35 @@ import joblib
 import os
 from datetime import datetime, timedelta
 
-# ------------------------------
-# 1. Load Data
-# ------------------------------
+
+
+
 
 data_file = "data/cleaned_data.csv"
 if not os.path.exists(data_file):
     raise FileNotFoundError(f"{data_file} not found!")
-
 data = pd.read_csv(data_file)
-print(f"📂 Loaded data with shape: {data.shape}")
+print(f"Loaded data with shape: {data.shape}")
 
-# ------------------------------
-# 2. Filter Last 1 Year of Data
-# ------------------------------
+
+
+
 if "date" in data.columns:
     data["date"] = pd.to_datetime(data["date"], errors="coerce")
     one_year_ago = data["date"].max() - pd.Timedelta(days=365)
     data = data[data["date"] >= one_year_ago]
-    print(f"📆 Using data from {data['date'].min().date()} to {data['date'].max().date()}")
-
-# ------------------------------
-# 3. Feature Engineering
-# ------------------------------
-
-# Base features
+    print(f"Using data from {data['date'].min().date()} to {data['date'].max().date()}")
 features = [
     "co", "no", "no2", "o3", "so2", "pm2_5", "pm10", "nh3",
     "temperature", "humidity", "pressure", "wind_speed"
 ]
 
-# Time-based features
+
 if "date" in data.columns:
     data["day_of_week"] = data["date"].dt.weekday
     data["month"] = data["date"].dt.month
     data["is_weekend"] = (data["day_of_week"] >= 5).astype(int)
     features += ["day_of_week", "month", "is_weekend"]
-
-# Interaction features
 data["temp_humidity_interaction"] = data["temperature"] * data["humidity"]
 data["pressure_wind_interaction"] = data["pressure"] * data["wind_speed"]
 data["pm25_pm10_ratio"] = data["pm2_5"] / (data["pm10"] + 1e-6)
@@ -59,25 +50,23 @@ features += [
     "co_no2_ratio"
 ]
 
-# Lag features — past AQI averages
+
 for lag in [1, 2, 7]:
     data[f"aqi_lag_{lag}"] = data["aqi_index"].shift(lag)
     features.append(f"aqi_lag_{lag}")
-
-# Rolling averages — smooth historical trends
 data["aqi_3day_avg"] = data["aqi_index"].rolling(3).mean()
 data["aqi_7day_avg"] = data["aqi_index"].rolling(7).mean()
 data["aqi_30day_avg"] = data["aqi_index"].rolling(30).mean()
 features += ["aqi_3day_avg", "aqi_7day_avg", "aqi_30day_avg"]
 
-# Handle missing values
+
 data = data.bfill().ffill()
 numeric_cols = data.select_dtypes(include=np.number).columns
 data[numeric_cols] = data[numeric_cols].fillna(data[numeric_cols].mean())
 
-# ------------------------------
-# 4. Target Variables (Future AQI)
-# ------------------------------
+
+
+
 data["aqi_24h"] = data["aqi_index"].shift(-24)
 data["aqi_48h"] = data["aqi_index"].shift(-48)
 data["aqi_72h"] = data["aqi_index"].shift(-72)
@@ -89,14 +78,14 @@ targets = {
     "72h": "aqi_72h",
 }
 
-# ------------------------------
-# 5. Train & Save Models
-# ------------------------------
+
+
+
 models_dir = "models"
 os.makedirs(models_dir, exist_ok=True)
 
 for horizon, target in targets.items():
-    print(f"\n⏳ Training model for {horizon} prediction...")
+    print(f"\nTraining model for {horizon} prediction...")
 
     X = data[features]
     y = data[target]
@@ -122,10 +111,9 @@ for horizon, target in targets.items():
     mae = mean_absolute_error(y_test, y_pred)
     rmse = np.sqrt(mean_squared_error(y_test, y_pred))
 
-    print(f"✅ {horizon} model trained: MAE={mae:.2f}, RMSE={rmse:.2f}")
+    print(f"{horizon} model trained: MAE={mae:.2f}, RMSE={rmse:.2f}")
 
     model_file = os.path.join(models_dir, f"model_{horizon}_1year.pkl")
     joblib.dump(model, model_file)
-    print(f"💾 Saved: {model_file}")
-
-print("\n🎯 All 1-year AQI models trained and saved successfully!")
+    print(f"Saved model to {model_file}")
+print("\nAll 1-year AQI models trained and saved successfully!")

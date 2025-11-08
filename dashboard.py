@@ -6,69 +6,146 @@ import requests
 import numpy as np
 import os
 import joblib
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-# ✅ Streamlit settings
-st.set_page_config(page_title="🌤️ AQI Dashboard", layout="wide")
-st.title("🌤️ AQI Index Forecast & EDA Dashboard")
 
-# ✅ Load Data
+st.set_page_config(page_title="AQI Dashboard", layout="wide")
+st.title("AQI Index Forecast & EDA Dashboard")
+
+
 data_path = "data/clean_aqi.csv"
 
 try:
     df = pd.read_csv(data_path)
 except FileNotFoundError:
-    st.error(f"❌ File not found: {data_path}")
+    st.error(f"Error: file not found: {data_path}")
     st.stop()
-
 df["date"] = pd.to_datetime(df["date"])
 df = df.sort_values("date")
 
-## Move Data Preview into its own tab
 
-# ✅ Create Tabs for Interactive Charts
+
+
+@st.cache_data(show_spinner=False)
+def compute_model_metrics() -> pd.DataFrame:
+    """
+    Compute hold-out evaluation metrics for the trained AQI forecast models.
+    """
+    data_path_metrics = "data/cleaned_data.csv"
+    if not os.path.exists(data_path_metrics):
+        raise FileNotFoundError(f"{data_path_metrics} not found.")
+    raw = pd.read_csv(data_path_metrics)
+    features = [
+        "co", "no", "no2", "o3", "so2", "pm2_5", "pm10", "nh3",
+        "temperature", "humidity", "pressure", "wind_speed",
+        "day_of_week"
+    ]
+    for lag in [1, 2, 3]:
+        raw[f"aqi_lag_{lag}"] = raw["aqi_7day_avg"].shift(lag)
+        features.append(f"aqi_lag_{lag}")
+    raw = raw.bfill()
+    numeric_columns = raw.select_dtypes(include=np.number).columns
+    raw[numeric_columns] = raw[numeric_columns].fillna(raw[numeric_columns].mean())
+    raw["aqi_24h"] = raw["aqi_index"].shift(-24)
+    raw["aqi_48h"] = raw["aqi_index"].shift(-48)
+    raw["aqi_72h"] = raw["aqi_index"].shift(-72)
+    raw.dropna(subset=["aqi_24h", "aqi_48h", "aqi_72h"], inplace=True)
+    targets = {
+        "24h": "aqi_24h",
+        "48h": "aqi_48h",
+        "72h": "aqi_72h",
+    }
+    records = []
+    for horizon, target_column in targets.items():
+        model_path = os.path.join("models", f"xgb_aqi_{horizon}.joblib")
+        if not os.path.exists(model_path):
+            continue
+        X = raw[features]
+        y = raw[target_column]
+        _X_train, X_test, _y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42
+        )
+        model = joblib.load(model_path)
+        predictions = model.predict(X_test)
+        mae = mean_absolute_error(y_test, predictions)
+        rmse = float(np.sqrt(mean_squared_error(y_test, predictions)))
+        r2 = r2_score(y_test, predictions)
+        records.append({
+            "Horizon": horizon,
+            "MAE": mae,
+            "RMSE": rmse,
+            "R²": r2,
+        })
+    return pd.DataFrame(records)
+
+
+
+def build_metrics_plot(metrics_df: pd.DataFrame) -> go.Figure:
+    """
+    Build comparative bar chart for MAE, RMSE, and R² across forecast horizons.
+    """
+    metric_names = {
+        "MAE": "Mean Absolute Error",
+        "RMSE": "Root Mean Squared Error",
+        "R²": "R² Score",
+    }
+    melted = metrics_df.melt(
+        id_vars="Horizon",
+        value_vars=list(metric_names.keys()),
+        var_name="Metric",
+        value_name="Value"
+    )
+    melted["Metric"] = melted["Metric"].map(metric_names)
+    fig = px.bar(
+        melted,
+        x="Horizon",
+        y="Value",
+        color="Metric",
+        barmode="group",
+        title="Model metrics by forecast horizon"
+    )
+    fig.update_layout(yaxis_title="Score", legend_title="Metric")
+    return fig
+
+
+
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-    "📈 AQI Trend",
-    "📦 Monthly Distribution",
-    "🔥 Heatmap",
-    "🌫️ Pollutants",
-    "🧠 Explainability",
-    "🤖 Predict",
-    "🧾 Data"
+    "AQI Trend",
+    "Monthly Distribution",
+    "Heatmap",
+    "Pollutants",
+    "Explainability",
+    "Predict",
+    "Data"
 ])
 
 with tab7:
-    st.write("### 🧾 Data Preview")
+    st.write("### Data Preview")
     st.dataframe(df.head())
-
-# --------------------------------------------------------------
-# ✅ TAB 6 — PREDICT (via FastAPI /predict)
-# --------------------------------------------------------------
 with tab6:
-    st.write("#### 🤖 Make Prediction")
+    st.write("#### Make Prediction")
 
     col_w, col_p1, col_p2 = st.columns([1, 1, 1])
 
     with col_w:
         st.write("Weather Features")
-        temperature = st.slider("Temperature (°C)", -10.0, 50.0, 28.0, 0.1)
+        temperature = st.slider("Temperature (degC)", -10.0, 50.0, 28.0, 0.1)
         humidity = st.slider("Humidity (%)", 0.0, 100.0, 65.0, 0.1)
         pressure = st.slider("Pressure (hPa)", 950.0, 1050.0, 1008.0, 0.1)
         wind_speed = st.slider("Wind Speed (m/s)", 0.0, 30.0, 5.0, 0.1)
-
     with col_p1:
         st.write("Pollutant Features")
-        pm2_5 = st.slider("PM2.5 (µg/m³)", 0.0, 500.0, 60.0, 0.1)
-        pm10 = st.slider("PM10 (µg/m³)", 0.0, 600.0, 100.0, 0.1)
-        no = st.slider("NO (µg/m³)", 0.0, 200.0, 10.0, 0.1)
-        no2 = st.slider("NO2 (µg/m³)", 0.0, 400.0, 40.0, 0.1)
-
+        pm2_5 = st.slider("PM2.5 (ug/m^3)", 0.0, 500.0, 60.0, 0.1)
+        pm10 = st.slider("PM10 (ug/m^3)", 0.0, 600.0, 100.0, 0.1)
+        no = st.slider("NO (ug/m^3)", 0.0, 200.0, 10.0, 0.1)
+        no2 = st.slider("NO2 (ug/m^3)", 0.0, 400.0, 40.0, 0.1)
     with col_p2:
         st.write("Additional Pollutants")
-        o3 = st.slider("O3 (µg/m³)", 0.0, 200.0, 70.0, 0.1)
-        so2 = st.slider("SO2 (µg/m³)", 0.0, 600.0, 20.0, 0.1)
-        co = st.slider("CO (µg/m³)", 0.0, 10000.0, 800.0, 1.0)
-        nh3 = st.slider("NH3 (µg/m³)", 0.0, 200.0, 8.0, 0.1)
-
+        o3 = st.slider("O3 (ug/m^3)", 0.0, 200.0, 70.0, 0.1)
+        so2 = st.slider("SO2 (ug/m^3)", 0.0, 600.0, 20.0, 0.1)
+        co = st.slider("CO (ug/m^3)", 0.0, 10000.0, 800.0, 1.0)
+        nh3 = st.slider("NH3 (ug/m^3)", 0.0, 200.0, 8.0, 0.1)
     payload = {
         "co": float(co),
         "no": float(no),
@@ -91,7 +168,6 @@ with tab6:
         if val <= 200: return "Unhealthy"
         if val <= 300: return "Very Unhealthy"
         return "Hazardous"
-
     if st.button("Predict AQI", use_container_width=True):
         try:
             resp = requests.post("http://127.0.0.1:8000/predict", json=payload, timeout=20)
@@ -105,12 +181,25 @@ with tab6:
                 st.info(aqi_category(aqi_val))
         except Exception as e:
             st.error(f"Request failed: {e}")
-
-# --------------------------------------------------------------
-# ✅ TAB 5 — EXPLAINABILITY (SHAP & LIME)
-# --------------------------------------------------------------
 with tab5:
-    st.write("#### 🧠 Model Explainability – SHAP & LIME")
+    st.write("#### Model Explainability - SHAP & LIME")
+    try:
+        metrics_df = compute_model_metrics()
+        if metrics_df.empty:
+            st.info("Train models to view validation metrics for 24h, 48h, and 72h horizons.")
+        else:
+            formatted = metrics_df.copy()
+            formatted["MAE"] = formatted["MAE"].round(3)
+            formatted["RMSE"] = formatted["RMSE"].round(3)
+            formatted["R²"] = formatted["R²"].round(3)
+            st.write("Model validation metrics (hold-out split)")
+            st.dataframe(formatted, use_container_width=True)
+            metrics_fig = build_metrics_plot(formatted)
+            st.plotly_chart(metrics_fig, use_container_width=True)
+    except FileNotFoundError as missing_file_error:
+        st.warning(str(missing_file_error))
+    except Exception as metrics_error:
+        st.error(f"Failed to compute metrics: {metrics_error}")
     compute_explain = st.button("Compute explanations", key="explain_compute")
     if compute_explain:
         try:
@@ -120,7 +209,6 @@ with tab5:
             except Exception as e:
                 st.error("Install explainability packages: pip install shap lime joblib")
                 raise
-            # Load a compatible model if available
             model_candidates = [
                 "models/model_24h_1year.pkl",
                 "models/model_24h.pkl",
@@ -134,21 +222,18 @@ with tab5:
                     break
                 except Exception:
                     continue
-
-            # Resolve feature columns to match the model's training schema
             numeric_cols = [c for c in df.select_dtypes(include='number').columns if c != "aqi_index"]
 
             model_feature_columns = None
-            # 1) Prefer model-native feature names
+
             if model is not None:
-                # scikit-learn estimators expose feature_names_in_
+
                 names_in = getattr(model, "feature_names_in_", None)
                 if names_in is not None:
                     try:
                         model_feature_columns = list(names_in)
                     except Exception:
                         pass
-                # XGBoost exposes booster feature_names
                 if model_feature_columns is None:
                     try:
                         booster = getattr(model, "get_booster", lambda: None)()
@@ -157,7 +242,6 @@ with tab5:
                             model_feature_columns = list(names)
                     except Exception:
                         pass
-            # 2) Fallback to explicit feature list artifact
             if model_feature_columns is None:
                 for fc_path in [
                     "models/feature_columns.pkl",
@@ -169,26 +253,19 @@ with tab5:
                             break
                     except Exception:
                         pass
-
-            # 3) Fallback to numeric columns if we could not discover training schema
             if model_feature_columns is None:
                 model_feature_columns = list(numeric_cols)
-
-            # Build features to match the model schema. Derive common engineered fields.
             work = df.copy()
             if "date" in work.columns:
                 work["date"] = pd.to_datetime(work["date"], errors="coerce")
                 work["year"] = work["date"].dt.year
                 work["day"] = work["date"].dt.day
                 work["day_of_year"] = work["date"].dt.dayofyear
-
-            # Derive lag/rolling variants if requested by model schema
             if "aqi_index" in work.columns:
                 for lag in [1, 2, 3, 7, 14]:
                     name = f"aqi_index_lag_{lag}"
                     if name in model_feature_columns and name not in work.columns:
                         work[name] = work["aqi_index"].shift(lag)
-                # rolling windows
                 for win in [3, 7, 14, 30]:
                     base = f"aqi_index_rolling_"
                     if f"{base}mean_{win}" in model_feature_columns:
@@ -199,8 +276,6 @@ with tab5:
                         work[f"{base}max_{win}"] = work["aqi_index"].rolling(win, min_periods=1).max()
                     if f"{base}min_{win}" in model_feature_columns:
                         work[f"{base}min_{win}"] = work["aqi_index"].rolling(win, min_periods=1).min()
-
-            # Interactions frequently used across variants
             if "temp_pressure_interaction" in model_feature_columns:
                 work["temp_pressure_interaction"] = work.get("temperature", 0.0) * work.get("pressure", 0.0)
             if "wind_temp_interaction" in model_feature_columns:
@@ -208,10 +283,8 @@ with tab5:
             if "humidity_pressure_interaction" in model_feature_columns:
                 work["humidity_pressure_interaction"] = work.get("humidity", 0.0) * work.get("pressure", 0.0)
             if "wind_cleaning_effect" in model_feature_columns:
-                # heuristic: higher wind and lower humidity cleans air more
-                work["wind_cleaning_effect"] = work.get("wind_speed", 0.0) * (100.0 - work.get("humidity", 0.0))
 
-            # Our earlier engineered features, if expected
+                work["wind_cleaning_effect"] = work.get("wind_speed", 0.0) * (100.0 - work.get("humidity", 0.0))
             if "temp_humidity_interaction" in model_feature_columns:
                 work["temp_humidity_interaction"] = work.get("temperature", 0.0) * work.get("humidity", 0.0)
             if "pressure_wind_interaction" in model_feature_columns:
@@ -220,8 +293,6 @@ with tab5:
                 work["pm25_pm10_ratio"] = work["pm2_5"] / (work["pm10"] + 1e-6)
             if "co_no2_ratio" in model_feature_columns and ("co" in work.columns and "no2" in work.columns):
                 work["co_no2_ratio"] = work["co"] / (work["no2"] + 1e-6)
-
-            # Assemble final feature matrix in model's order; fill missing with zeros
             final_features = []
             for col in model_feature_columns:
                 if col in work.columns:
@@ -229,23 +300,22 @@ with tab5:
                 else:
                     work[col] = 0.0
                     final_features.append(col)
-
             if not final_features:
                 st.error("No numeric feature columns available for explainability.")
             else:
                 X = work[final_features].copy()
-                # basic cleaning for explainers
+
                 X = X.fillna(X.mean(numeric_only=True)).head(300)
                 if X.empty:
                     st.error("Not enough data for explainability.")
                 else:
-                    # SHAP: compute values and show interactive Plotly charts
+
                     st.write("SHAP (interactive)")
-                    with st.spinner("Computing SHAP…"):
+                    with st.spinner("Computing SHAP..."):
                         if model is not None:
                             def _predict_nd(arr):
                                 try:
-                                    # ensure DataFrame for models that use column names
+
                                     return model.predict(pd.DataFrame(arr, columns=final_features))
                                 except Exception:
                                     return model.predict(arr)
@@ -257,7 +327,7 @@ with tab5:
                         mean_abs = np.mean(np.abs(vals), axis=0)
                         imp_df = pd.DataFrame({"feature": final_features, "importance": mean_abs}).sort_values("importance", ascending=False)
 
-                        # Persist for reuse
+
                         os.makedirs("reports/explainability", exist_ok=True)
                         imp_df.to_csv("reports/explainability/shap_importance.csv", index=False)
 
@@ -276,10 +346,8 @@ with tab5:
                             title=f"SHAP dependence: {dep_feature}"
                         )
                         st.plotly_chart(fig_dep, use_container_width=True)
-
-                    # LIME: interactive bar for single example
                     st.write("LIME (top contributions)")
-                    with st.spinner("Computing LIME…"):
+                    with st.spinner("Computing LIME..."):
                         def _predict_fn(arr):
                             if model is None:
                                 return [float(df["aqi_index"].mean())] * len(arr)
@@ -303,20 +371,16 @@ with tab5:
             st.error(f"Explainability failed: {e}")
     else:
         st.caption("Click 'Compute explanations' to load SHAP & LIME (heavy). Other tabs load at start.")
-
-# --------------------------------------------------------------
-# ✅ TAB 1 — AQI TREND (Category Bands + 7D & 30D Rolling Average)
-# --------------------------------------------------------------
 with tab1:
-    st.write("#### 📈 AQI Trend Over Time with Health Categories")
+    st.write("#### AQI Trend Over Time with Health Categories")
 
-    # Rolling averages
+
     df["AQI_7D"] = df["aqi_index"].rolling(7, min_periods=1).mean()
     df["AQI_30D"] = df["aqi_index"].rolling(30, min_periods=1).mean()
 
     fig1 = go.Figure()
 
-    # AQI Category Ranges (Colored Bands)
+
     aqi_bands = [
         (0, 50, "Good", "rgba(0,255,0,0.20)"),
         (51, 100, "Moderate", "rgba(255,255,0,0.20)"),
@@ -345,8 +409,6 @@ with tab1:
             font=dict(size=10),
             xanchor="left"
         )
-
-    # Daily AQI Line
     fig1.add_trace(go.Scatter(
         x=df["date"],
         y=df["aqi_index"],
@@ -356,7 +418,7 @@ with tab1:
         marker=dict(size=4)
     ))
 
-    # Rolling lines
+
     fig1.add_trace(go.Scatter(
         x=df["date"],
         y=df["AQI_7D"],
@@ -376,43 +438,31 @@ with tab1:
     fig1.update_layout(
         title="AQI Trend Over Time (Category Bands + Rolling Average)",
         xaxis_title="Date",
-        yaxis_title="AQI Index (0–300)",
+        yaxis_title="AQI Index (0-300)",
         template="plotly_white",
         hovermode="x unified",
         height=450
     )
 
     st.plotly_chart(fig1, use_container_width=True)
-
-# --------------------------------------------------------------
-# ✅ TAB 2 — AQI BOXPLOT BY MONTH
-# --------------------------------------------------------------
 with tab2:
-    st.write("#### 📦 AQI Distribution by Month")
+    st.write("#### AQI Distribution by Month")
     df["month"] = df["date"].dt.month_name()
 
     fig2 = px.box(df, x="month", y="aqi_index", color="month",
                   title="AQI Distribution by Month")
     fig2.update_layout(xaxis_title="Month", yaxis_title="AQI Index", showlegend=False)
     st.plotly_chart(fig2, use_container_width=True)
-
-# --------------------------------------------------------------
-# ✅ TAB 3 — CORRELATION HEATMAP
-# --------------------------------------------------------------
 with tab3:
-    st.write("#### 🔥 Correlation Heatmap of Pollutants & AQI")
+    st.write("#### Correlation Heatmap of Pollutants & AQI")
     numeric = df.select_dtypes(include='number')
     corr = numeric.corr().round(2)
 
     fig3 = px.imshow(corr, text_auto=True, color_continuous_scale="RdBu_r",
                      title="Correlation Heatmap")
     st.plotly_chart(fig3, use_container_width=True)
-
-# --------------------------------------------------------------
-# ✅ TAB 4 — POLLUTANT BAR CHART
-# --------------------------------------------------------------
 with tab4:
-    st.write("#### 🌫️ Average Pollutant Concentrations (µg/m³)")
+    st.write("#### Average Pollutant Concentrations (ug/m^3)")
     pollutants = ["co", "no", "no2", "o3", "so2", "pm2_5", "pm10", "nh3"]
 
     existing = [p for p in pollutants if p in df.columns]
@@ -423,15 +473,11 @@ with tab4:
 
         fig4 = px.bar(avg_vals, x="Pollutant", y="Avg_Concentration",
                       color="Pollutant", title="Average Pollutant Levels")
-        fig4.update_layout(yaxis_title="µg/m³")
+        fig4.update_layout(yaxis_title="ug/m^3")
         st.plotly_chart(fig4, use_container_width=True)
     else:
-        st.warning("⚠️ Pollutant columns missing!")
-
-# --------------------------------------------------------------
-# ✅ Forecast table (example)
-# --------------------------------------------------------------
-st.subheader("🔮 AQI Forecast (Next 3 Days)")
+        st.warning("WARNING Pollutant columns missing!")
+st.subheader("AQI Forecast (Next 3 Days)")
 try:
     resp = requests.get("http://127.0.0.1:8000/get_forecast")
     data = resp.json()
@@ -440,12 +486,10 @@ try:
         forecast_df = pd.DataFrame(data["forecasts"])
         st.dataframe(forecast_df)
 
-        # highest AQI warning
+
         highest = forecast_df["predicted_aqi"].max()
         st.warning(f"Highest forecasted AQI: {highest}")
-
     else:
         st.error("Backend error: " + data.get("message", "unknown"))
-
 except:
-    st.error("❌ Cannot connect to backend for forecast.")
+    st.error("ERROR Cannot connect to backend for forecast.")

@@ -1,4 +1,4 @@
-# fastapi_app.py
+                
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import joblib
@@ -8,7 +8,7 @@ from typing import List, Dict
 
 app = FastAPI(title="AQI Prediction API")
 
-# Load your trained model (try multiple known paths); fallback to None
+
 _MODEL_CANDIDATES = [
     "models/model_24h_1year.pkl",
     "models/model_24h.pkl",
@@ -23,10 +23,9 @@ def _try_load_model():
         except Exception:
             continue
     return None
-
 model = _try_load_model()
 
-# Define the data format we’ll accept
+
 class AQIInput(BaseModel):
     co: float
     no: float
@@ -40,7 +39,6 @@ class AQIInput(BaseModel):
     humidity: float
     pressure: float
     wind_speed: float
-
 def _compute_aqi_from_payload(data: AQIInput) -> float:
     """Compute AQI using EPA breakpoints from the request payload."""
     PM25 = [
@@ -71,7 +69,6 @@ def _compute_aqi_from_payload(data: AQIInput) -> float:
                 span = (c_high - c_low) or 1.0
                 return aqi_low + (val - c_low) / span * (aqi_high - aqi_low)
         return float(bps[-1][3])
-
     vals = [
         calc(float(data.pm2_5), PM25),
         calc(float(data.pm10), PM10),
@@ -80,11 +77,9 @@ def _compute_aqi_from_payload(data: AQIInput) -> float:
         calc(float(data.so2), SO2),
     ]
     return float(np.nanmax(vals))
-
-
 @app.post("/predict")
 def predict(data: AQIInput):
-    # Try ML model first, but gracefully fallback to computed AQI on any error
+
     if model is not None:
         try:
             features = np.array([[data.co, data.no, data.no2, data.o3, data.so2,
@@ -94,12 +89,8 @@ def predict(data: AQIInput):
             return {"predicted_aqi": float(prediction)}
         except Exception:
             pass
-
-    # Fallback
     computed = _compute_aqi_from_payload(data)
     return {"predicted_aqi": computed}
-
-
 def _read_forecast_csvs() -> List[Dict]:
     """
     Load next-3-day forecast from both known sources and combine:
@@ -109,7 +100,7 @@ def _read_forecast_csvs() -> List[Dict]:
     """
     frames: List[pd.DataFrame] = []
 
-    # Source A: api_project.py output
+
     try:
         a = pd.read_csv("data/forecast_daily_next3.csv")
         if "date" in a.columns:
@@ -124,8 +115,6 @@ def _read_forecast_csvs() -> List[Dict]:
                 frames.append(a)
     except Exception:
         pass
-
-    # Source B: predict_aqi.py output
     try:
         b = pd.read_csv("data/predicted_aqi_next3days.csv")
         if {"Date", "Predicted_AQI"}.issubset(b.columns):
@@ -134,30 +123,23 @@ def _read_forecast_csvs() -> List[Dict]:
             frames.append(b[["date", "predicted_aqi"]])
     except Exception:
         pass
-
     if not frames:
         return []
-
     merged = pd.concat(frames, ignore_index=True)
-    # Drop duplicates by date, keeping the first occurrence
+
     merged = merged.dropna(subset=["date"]).drop_duplicates(subset=["date"], keep="first")
     return merged.to_dict(orient="records")
-
-
 def _select_next3(records: List[Dict]) -> List[Dict]:
     if not records:
         return []
     df = pd.DataFrame(records)
     if "date" not in df.columns:
         return records
-    # Normalize date and filter strictly after today (local date)
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
     from datetime import datetime
     today = datetime.today().date()
     df = df[df["date"] > today].sort_values("date").head(3)
     return df.to_dict(orient="records")
-
-
 @app.get("/get_forecast")
 def get_forecast():
     """HTTP endpoint to return next-3-day forecast for the dashboard."""
@@ -165,8 +147,6 @@ def get_forecast():
     if not records:
         raise HTTPException(status_code=404, detail="No forecast data available. Run data collection/prediction first.")
     return {"status": "success", "forecasts": _select_next3(records)}
-
-
 @app.get("/")
 def root():
     return {"status": "ok"}

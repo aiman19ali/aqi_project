@@ -3,38 +3,37 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
-# Streamlit page config
-st.set_page_config(page_title="🌤️ AQI Index Forecast Dashboard", layout="wide")
 
-st.title("🌤️ AQI Index Forecast and EDA Dashboard")
+st.set_page_config(page_title="AQI Index Forecast Dashboard", layout="wide")
 
-# -----------------------------
-# STEP 1: Load Data
-# -----------------------------
+st.title("AQI Index Forecast and EDA Dashboard")
+
+
+
+
 data_path = "data/clean_aqi.csv"
 
 try:
     df = pd.read_csv(data_path)
 except FileNotFoundError:
-    st.error(f"❌ File not found: {data_path}")
+    st.error(f"ERROR File not found: {data_path}")
     st.stop()
-
-st.write("### 🧾 Data Preview")
+st.write("### Data Preview")
 st.dataframe(df.head())
 
-# -----------------------------
-# STEP 2: EDA Charts (Interactive)
-# -----------------------------
-st.write("## 📊 Exploratory Data Analysis (EDA)")
 
-# ✅ Chart 1 - AQI Trend Over Time (with AQI Category Bands)
-st.write("#### 📈 AQI Trend Over Time (Category-based)")
+
+
+st.write("## Exploratory Data Analysis (EDA)")
+
+
+st.write("#### AQI Trend Over Time (Category-based)")
 df["date"] = pd.to_datetime(df["date"])
 df = df.sort_values("date")
 
 fig1 = go.Figure()
 
-# Line for AQI values
+
 fig1.add_trace(go.Scatter(
     x=df["date"],
     y=df["aqi_index"],
@@ -44,7 +43,7 @@ fig1.add_trace(go.Scatter(
     marker=dict(size=4)
 ))
 
-# Add AQI category bands (Good → Very Unhealthy)
+
 aqi_bands = [
     (0, 50, "Good", "rgba(144,238,144,0.3)"),
     (51, 100, "Moderate", "rgba(255,255,102,0.3)"),
@@ -72,11 +71,10 @@ for low, high, label, color in aqi_bands:
         font=dict(size=10, color="black"),
         xanchor="left"
     )
-
 fig1.update_layout(
     title="AQI Trend Over Time (Category-based)",
     xaxis_title="Date",
-    yaxis_title="AQI Index (0–300)",
+    yaxis_title="AQI Index (0-300)",
     template="plotly_white",
     hovermode="x unified",
     height=400
@@ -84,8 +82,8 @@ fig1.update_layout(
 
 st.plotly_chart(fig1, use_container_width=True)
 
-# ✅ Chart 2 - AQI Distribution by Month
-st.write("#### 📦 AQI Distribution by Month")
+
+st.write("#### AQI Distribution by Month")
 df["month"] = df["date"].dt.month_name()
 
 fig2 = px.box(df, x="month", y="aqi_index", color="month",
@@ -93,8 +91,8 @@ fig2 = px.box(df, x="month", y="aqi_index", color="month",
 fig2.update_layout(xaxis_title="Month", yaxis_title="AQI Index", showlegend=False)
 st.plotly_chart(fig2, use_container_width=True)
 
-# ✅ Chart 3 - Correlation Heatmap
-st.write("#### 🔥 Correlation Heatmap of Pollutants")
+
+st.write("#### Correlation Heatmap of Pollutants")
 numeric_cols = df.select_dtypes(include='number').columns
 corr = df[numeric_cols].corr().round(2)
 
@@ -102,8 +100,8 @@ fig3 = px.imshow(corr, text_auto=True, color_continuous_scale="RdBu_r",
                  title="Correlation Heatmap (AQI vs Pollutants)")
 st.plotly_chart(fig3, use_container_width=True)
 
-# ✅ Chart 4 - Pollutant Concentrations
-st.write("#### 🌫️ Average Pollutant Concentrations (µg/m³)")
+
+st.write("#### Average Pollutant Concentrations (ug/m^3)")
 pollutants = ["co", "no", "no2", "o3", "so2", "pm2_5", "pm10", "nh3"]
 
 if all(p in df.columns for p in pollutants):
@@ -112,15 +110,11 @@ if all(p in df.columns for p in pollutants):
 
     fig4 = px.bar(avg_pollutants, x="Pollutant", y="Average Concentration",
                   color="Pollutant", title="Average Pollutant Concentrations")
-    fig4.update_layout(xaxis_title="Pollutant", yaxis_title="µg/m³")
+    fig4.update_layout(xaxis_title="Pollutant", yaxis_title="ug/m^3")
     st.plotly_chart(fig4, use_container_width=True)
 else:
-    st.warning("⚠️ Some pollutant columns are missing in the dataset!")
-
-# -----------------------------
-# STEP 3: Forecast Results
-# -----------------------------
-st.write("## 🔮 AQI Forecast for Next 3 Days")
+    st.warning("WARNING Some pollutant columns are missing in the dataset!")
+st.write("## AQI Forecast for Next 3 Days")
 
 forecast_data = {
     "Date": ["2025-11-02", "2025-11-03", "2025-11-04"],
@@ -129,4 +123,4 @@ forecast_data = {
 forecast_df = pd.DataFrame(forecast_data)
 st.table(forecast_df)
 
-st.success("✅ Dashboard Loaded Successfully!")
+st.success("Dashboard Loaded Successfully!")

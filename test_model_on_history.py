@@ -7,10 +7,8 @@ print("DATA_PATH:", DATA_PATH)
 
 if not os.path.exists(MODEL_PATH):
     raise SystemExit("Model file not found at models/aqi_model.pkl")
-
 if not os.path.exists(DATA_PATH):
     raise SystemExit("History file not found at data/cleaned_data.csv")
-
 model = joblib.load(MODEL_PATH)
 print("Loaded model type:", type(model))
 

@@ -14,12 +14,8 @@ for name in modules:
         importlib.import_module(name)
     except Exception as e:
         failures.append({'module': name, 'error': str(e)})
-
 if failures:
     print('IMPORT FAILURES:\n' + json.dumps(failures, indent=2))
     sys.exit(1)
 else:
     print('All core imports OK')
-
-
-
